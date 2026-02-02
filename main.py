@@ -201,6 +201,67 @@ def get_user_posts(user_id: int, db: Session = Depends(get_db)):
         .all()
     return posts
 
+@app.put("/posts/{post_id}", response_model=schemas.Post)
+def update_post(
+    post_id: int,
+    post_update: schemas.PostUpdate,
+    user_id: int = None,
+    db: Session = Depends(get_db)
+):
+    """
+    Update an existing post by ID.
+
+    Optionally verifies owner via user_id query parameter.
+    """
+    post = db.query(models.Post).filter(models.Post.id == post_id).first()
+    if not post:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Post not found"
+        )
+
+    if user_id is not None and post.owner_id != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not allowed to edit this post"
+        )
+
+    update_data = post_update.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(post, key, value)
+
+    db.commit()
+    db.refresh(post)
+    return post
+
+@app.delete("/posts/{post_id}")
+def delete_post(
+    post_id: int,
+    user_id: int = None,
+    db: Session = Depends(get_db)
+):
+    """
+    Delete a post by ID.
+
+    Optionally verifies owner via user_id query parameter.
+    """
+    post = db.query(models.Post).filter(models.Post.id == post_id).first()
+    if not post:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Post not found"
+        )
+
+    if user_id is not None and post.owner_id != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not allowed to delete this post"
+        )
+
+    db.delete(post)
+    db.commit()
+    return {"message": "Post deleted"}
+
 # --- Favorites APIs ---
 
 @app.post("/favorites/", status_code=status.HTTP_201_CREATED)
