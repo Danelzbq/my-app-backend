@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from typing import List
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
+import os
 import models
 import schemas
 import database
@@ -28,10 +29,16 @@ app = FastAPI(
 )
 
 # Add CORS
+allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "*")
+allowed_origins = [origin.strip() for origin in allowed_origins_env.split(",") if origin.strip()]
+
+# If wildcard is used, credentials must be False for browsers to accept it.
+allow_credentials = False if "*" in allowed_origins else True
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=allowed_origins,
+    allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
