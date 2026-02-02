@@ -129,14 +129,27 @@ def login(login_data: LoginRequest, db: Session = Depends(get_db)):
 # --- Posts APIs ---
 
 @app.post("/posts/", response_model=schemas.Post, status_code=status.HTTP_201_CREATED)
-def create_post(post: schemas.PostCreate, db: Session = Depends(get_db)):
+def create_post(
+    post: schemas.PostCreate, 
+    user_id: int = None,
+    db: Session = Depends(get_db)
+):
     """
     Create a new post.
+    
+    Supports two ways to specify the owner:
+    1. owner_id in request body (PostCreate schema)
+    2. user_id as query parameter (for compatibility)
     
     Requires post details including title, content, author, etc.
     Returns the created post with generated ID and timestamp.
     """
-    db_post = models.Post(**post.model_dump())
+    # Support user_id query parameter for backward compatibility
+    post_data = post.model_dump()
+    if user_id is not None:
+        post_data['owner_id'] = user_id
+    
+    db_post = models.Post(**post_data)
     db.add(db_post)
     db.commit()
     db.refresh(db_post)

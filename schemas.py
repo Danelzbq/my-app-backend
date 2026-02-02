@@ -45,7 +45,7 @@ class PostBase(BaseModel):
 
 class PostCreate(PostBase):
     """Schema for creating a new post."""
-    owner_id: int = Field(..., gt=0, description="ID of the post owner")
+    owner_id: Optional[int] = Field(None, gt=0, description="ID of the post owner (can also use user_id query param)")
 
 
 class PostUpdate(BaseModel):
