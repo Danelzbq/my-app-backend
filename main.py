@@ -208,6 +208,42 @@ def admin_login(login_data: LoginRequest, db: Session = Depends(get_db)):
     }
 
 
+@app.post("/admin/register")
+def admin_register(login_data: LoginRequest, db: Session = Depends(get_db)):
+    """Bootstrap the first admin account if none exists."""
+    existing_admin = db.query(models.User).filter(models.User.is_admin == True).first()
+    if existing_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin already exists"
+        )
+
+    existing_user = db.query(models.User).filter(
+        models.User.username == login_data.username
+    ).first()
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Username already registered"
+        )
+
+    hashed_password = auth.get_password_hash(login_data.password)
+    admin_user = models.User(
+        username=login_data.username,
+        hashed_password=hashed_password,
+        is_admin=True
+    )
+    db.add(admin_user)
+    db.commit()
+    db.refresh(admin_user)
+
+    return {
+        "message": "Admin registration successful",
+        "admin_id": admin_user.id,
+        "username": admin_user.username
+    }
+
+
 @app.get("/admin")
 def admin_root():
     """Admin API root for quick health check."""
