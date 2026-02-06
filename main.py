@@ -208,6 +208,12 @@ def admin_login(login_data: LoginRequest, db: Session = Depends(get_db)):
     }
 
 
+@app.get("/admin")
+def admin_root():
+    """Admin API root for quick health check."""
+    return {"message": "Admin API is running"}
+
+
 @app.get("/admin/users", response_model=List[schemas.AdminUser])
 def admin_list_users(admin_id: int, db: Session = Depends(get_db)):
     """List all users (admin only)."""
