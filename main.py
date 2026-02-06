@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from typing import List
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 import os
 import models
 import schemas
@@ -54,6 +55,49 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def ensure_admin_column():
+    """Ensure users.is_admin column exists for legacy databases."""
+    try:
+        with database.engine.connect() as conn:
+            conn.execute(text("ALTER TABLE users ADD COLUMN is_admin BOOLEAN NOT NULL DEFAULT 0"))
+            conn.commit()
+    except Exception:
+        # Column probably exists; ignore for idempotency
+        pass
+
+
+def ensure_default_admin():
+    """Create default admin user if ADMIN_USERNAME/ADMIN_PASSWORD are set."""
+    admin_username = os.getenv("ADMIN_USERNAME")
+    admin_password = os.getenv("ADMIN_PASSWORD")
+    if not admin_username or not admin_password:
+        return
+    db = database.SessionLocal()
+    try:
+        existing = db.query(models.User).filter(models.User.username == admin_username).first()
+        if existing:
+            if not existing.is_admin:
+                existing.is_admin = True
+                db.commit()
+            return
+        hashed_password = auth.get_password_hash(admin_password)
+        admin_user = models.User(
+            username=admin_username,
+            hashed_password=hashed_password,
+            is_admin=True
+        )
+        db.add(admin_user)
+        db.commit()
+    finally:
+        db.close()
+
+
+@app.on_event("startup")
+def on_startup():
+    ensure_admin_column()
+    ensure_default_admin()
 
 # --- User Auth ---
 class LoginRequest(BaseModel):
@@ -125,6 +169,142 @@ def login(login_data: LoginRequest, db: Session = Depends(get_db)):
         "user_id": user.id, 
         "username": user.username
     }
+
+
+# --- Admin Auth & Management ---
+def require_admin(admin_id: int, db: Session) -> models.User:
+    admin_user = db.query(models.User).filter(models.User.id == admin_id).first()
+    if not admin_user or not admin_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required"
+        )
+    return admin_user
+
+
+@app.post("/admin/login")
+def admin_login(login_data: LoginRequest, db: Session = Depends(get_db)):
+    """Admin login endpoint."""
+    user = db.query(models.User).filter(
+        models.User.username == login_data.username
+    ).first()
+
+    if not user or not user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect admin username or password"
+        )
+
+    if not auth.verify_password(login_data.password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect admin username or password"
+        )
+
+    return {
+        "message": "Admin login successful",
+        "admin_id": user.id,
+        "username": user.username
+    }
+
+
+@app.get("/admin/users", response_model=List[schemas.AdminUser])
+def admin_list_users(admin_id: int, db: Session = Depends(get_db)):
+    """List all users (admin only)."""
+    require_admin(admin_id, db)
+    users = db.query(models.User).order_by(models.User.id.asc()).all()
+    return users
+
+
+@app.post("/admin/users", response_model=schemas.AdminUser, status_code=status.HTTP_201_CREATED)
+def admin_create_user(user: schemas.UserCreate, admin_id: int, is_admin: bool = False, db: Session = Depends(get_db)):
+    """Create a user or admin account (admin only)."""
+    require_admin(admin_id, db)
+    existing = db.query(models.User).filter(models.User.username == user.username).first()
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Username already registered"
+        )
+    hashed_password = auth.get_password_hash(user.password)
+    db_user = models.User(
+        username=user.username,
+        hashed_password=hashed_password,
+        is_admin=is_admin
+    )
+    db.add(db_user)
+    db.commit()
+    db.refresh(db_user)
+    return db_user
+
+
+@app.post("/admin/posts", response_model=schemas.Post, status_code=status.HTTP_201_CREATED)
+def admin_create_post(
+    post: schemas.PostCreate,
+    admin_id: int,
+    db: Session = Depends(get_db)
+):
+    """Create a post (admin only)."""
+    require_admin(admin_id, db)
+    post_data = post.model_dump()
+    if not post_data.get("owner_id"):
+        post_data["owner_id"] = admin_id
+    db_post = models.Post(**post_data)
+    db.add(db_post)
+    db.commit()
+    db.refresh(db_post)
+    return db_post
+
+
+@app.get("/admin/posts", response_model=List[schemas.Post])
+def admin_list_posts(skip: int = 0, limit: int = 100, admin_id: int = None, db: Session = Depends(get_db)):
+    """List posts (admin only)."""
+    require_admin(admin_id, db)
+    posts = db.query(models.Post)
+    posts = posts.order_by(models.Post.created_at.desc()).offset(skip).limit(limit).all()
+    return posts
+
+
+@app.put("/admin/posts/{post_id}", response_model=schemas.Post)
+def admin_update_post(
+    post_id: int,
+    post_update: schemas.PostUpdate,
+    admin_id: int,
+    db: Session = Depends(get_db)
+):
+    """Update a post (admin only)."""
+    require_admin(admin_id, db)
+    post = db.query(models.Post).filter(models.Post.id == post_id).first()
+    if not post:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Post not found"
+        )
+    update_data = post_update.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(post, key, value)
+    db.commit()
+    db.refresh(post)
+    return post
+
+
+@app.delete("/admin/posts/{post_id}")
+def admin_delete_post(
+    post_id: int,
+    admin_id: int,
+    db: Session = Depends(get_db)
+):
+    """Delete a post (admin only)."""
+    require_admin(admin_id, db)
+    post = db.query(models.Post).filter(models.Post.id == post_id).first()
+    if not post:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Post not found"
+        )
+    db.delete(post)
+    db.commit()
+    return {"message": "Post deleted"}
 
 # --- Posts APIs ---
 

@@ -26,6 +26,15 @@ class User(UserBase):
         from_attributes = True
 
 
+class AdminUser(UserBase):
+    """Schema for admin user response."""
+    id: int
+    is_admin: bool
+
+    class Config:
+        from_attributes = True
+
+
 class PostBase(BaseModel):
     """Base post schema with common fields."""
     type: str = Field(default="文章", max_length=20)
